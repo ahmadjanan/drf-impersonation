@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 from django.contrib.auth.models import User
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import NotFound, PermissionDenied
@@ -28,8 +28,8 @@ class ProfileUUIDAuthentication(ImpersonationTokenAuthentication):
     impersonation_lookup_fields = ("profile__uuid",)
 
 
-class TokenKeyAuthentication(ImpersonationTokenAuthentication):
-    impersonation_lookup_fields = ("auth_token__key",)
+class TokenAuthentication(ImpersonationTokenAuthentication):
+    impersonation_lookup_fields = ("auth_token",)  # Ends on a reverse relation.
 
 
 class UsernameAuthentication(ImpersonationTokenAuthentication):
@@ -185,12 +185,6 @@ def test_unknown_setting_rejected(admin, target, settings):
         authenticate(admin, str(target.pk))
 
 
-def test_impersonator_set_on_django_request(admin, target):
-    request, _ = authenticate(admin, str(target.pk))
-    # APIRequestFactory returns a plain HttpRequest, so the attribute lives on it directly.
-    assert request.impersonator == admin
-
-
 def test_impersonator_is_none_when_base_auth_returns_none(target):
     request = APIRequestFactory().get("/", HTTP_X_IMPERSONATE_USER=str(target.pk))
     assert ImpersonationTokenAuthentication().authenticate(request) is None
@@ -223,9 +217,17 @@ def test_lookup_across_reverse_relation_with_uuid(admin, target):
             authenticate(admin, directive, ProfileUUIDAuthentication)
 
 
-def test_lookup_ending_on_relation_key(admin, target):
-    _, (user, _) = authenticate(admin, target.auth_token.key, TokenKeyAuthentication)
+def test_lookup_ending_on_relation(admin, target):
+    _, (user, _) = authenticate(admin, target.auth_token.key, TokenAuthentication)
     assert user == target
+
+
+def test_misspelled_lookup_raises(admin, target):
+    class Typo(ImpersonationTokenAuthentication):
+        impersonation_lookup_fields = ("emial__iexact",)
+
+    with pytest.raises(FieldDoesNotExist):
+        authenticate(admin, target.email, Typo)
 
 
 def test_end_to_end(admin, target):

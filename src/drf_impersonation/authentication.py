@@ -25,15 +25,14 @@ def _lookup_field(lookup: str) -> Any:
     """Resolve the model field a lookup like ``profile__uuid`` or ``email__iexact`` ends on,
     following relations. Trailing transforms and lookups (``iexact``) are skipped."""
     model = get_user_model()
-    field = model._meta.pk
+    field: Any = None
     for part in lookup.split("__"):
-        if part == "pk":
-            field = model._meta.pk
-        else:
-            try:
-                field = model._meta.get_field(part)
-            except FieldDoesNotExist:
-                break
+        try:
+            field = model._meta.pk if part == "pk" else model._meta.get_field(part)
+        except FieldDoesNotExist:
+            if field is None:
+                raise  # A typo in the first part must not silently fall back to pk.
+            break
         if field.is_relation:
             model = field.related_model
     # A lookup that ends on a relation compares against the related model's key.

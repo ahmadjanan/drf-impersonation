@@ -2,7 +2,7 @@ from typing import Any
 
 from django.core.checks import Error, register
 
-from .conf import unknown_keys
+from .conf import DEFAULTS, unknown_keys
 
 
 @register()
@@ -13,7 +13,7 @@ def check_settings(app_configs: Any, **kwargs: Any) -> list[Error]:
     return [
         Error(
             f"Unknown DRF_IMPERSONATION keys: {', '.join(unknown)}",
-            hint="Valid keys are READ_ONLY, SIGNALS and OPENAPI.",
+            hint=f"Valid keys: {', '.join(DEFAULTS)}.",
             id="drf_impersonation.E001",
         )
     ]
