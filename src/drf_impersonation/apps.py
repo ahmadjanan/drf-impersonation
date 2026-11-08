@@ -6,6 +6,8 @@ class DrfImpersonationConfig(AppConfig):
     verbose_name = "DRF Impersonation"
 
     def ready(self) -> None:
+        from . import checks  # noqa: F401
+
         try:
             import drf_spectacular  # noqa: F401
         except ImportError:  # pragma: no cover

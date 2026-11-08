@@ -1,12 +1,18 @@
+import uuid
+
 import pytest
 from django.contrib.auth.models import User
 from django.core.exceptions import ImproperlyConfigured
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import NotFound, PermissionDenied
-from rest_framework.test import APIRequestFactory
+from rest_framework.request import Request
+from rest_framework.test import APIClient, APIRequestFactory
 
-from drf_impersonation.authentication import ImpersonationTokenAuthentication
+from drf_impersonation.authentication import ImpersonationMixin, ImpersonationTokenAuthentication
+from drf_impersonation.checks import check_settings
 from drf_impersonation.signals import user_impersonated
+from tests.models import Profile
 
 pytestmark = pytest.mark.django_db
 
@@ -16,6 +22,22 @@ class StaffEmailAuthentication(ImpersonationTokenAuthentication):
 
     def can_impersonate(self, request, actor):
         return actor.is_staff
+
+
+class ProfileUUIDAuthentication(ImpersonationTokenAuthentication):
+    impersonation_lookup_fields = ("profile__uuid",)
+
+
+class TokenKeyAuthentication(ImpersonationTokenAuthentication):
+    impersonation_lookup_fields = ("auth_token__key",)
+
+
+class UsernameAuthentication(ImpersonationTokenAuthentication):
+    impersonation_lookup_fields = ("pk", "username")
+
+
+class ImpersonationSessionAuthentication(ImpersonationMixin, SessionAuthentication):
+    pass
 
 
 def make_user(username, **extra):
@@ -161,3 +183,79 @@ def test_unknown_setting_rejected(admin, target, settings):
     settings.DRF_IMPERSONATION = {"READONLY": False}
     with pytest.raises(ImproperlyConfigured, match="READONLY"):
         authenticate(admin, str(target.pk))
+
+
+def test_impersonator_set_on_django_request(admin, target):
+    request, _ = authenticate(admin, str(target.pk))
+    # APIRequestFactory returns a plain HttpRequest, so the attribute lives on it directly.
+    assert request.impersonator == admin
+
+
+def test_impersonator_is_none_when_base_auth_returns_none(target):
+    request = APIRequestFactory().get("/", HTTP_X_IMPERSONATE_USER=str(target.pk))
+    assert ImpersonationTokenAuthentication().authenticate(request) is None
+    assert request.impersonator is None
+
+
+def test_session_base_class(admin, target):
+    request = Request(APIRequestFactory().get("/", HTTP_X_IMPERSONATE_USER=str(target.pk)))
+    request._request.user = admin
+    user, auth = ImpersonationSessionAuthentication().authenticate(request)
+    assert (user, auth) == (target, None)
+    assert request.impersonator == admin
+    assert request._request.impersonator == admin
+
+
+def test_ambiguous_target_not_found(admin, target):
+    make_user(str(target.pk))  # username equal to another user's pk
+    with pytest.raises(NotFound):
+        authenticate(admin, str(target.pk), UsernameAuthentication)
+    _, (user, _) = authenticate(admin, "target", UsernameAuthentication)
+    assert user == target
+
+
+def test_lookup_across_reverse_relation_with_uuid(admin, target):
+    profile = Profile.objects.create(user=target)
+    _, (user, _) = authenticate(admin, str(profile.uuid), ProfileUUIDAuthentication)
+    assert user == target
+    for directive in ["not-a-uuid", str(uuid.uuid4())]:
+        with pytest.raises(NotFound):
+            authenticate(admin, directive, ProfileUUIDAuthentication)
+
+
+def test_lookup_ending_on_relation_key(admin, target):
+    _, (user, _) = authenticate(admin, target.auth_token.key, TokenKeyAuthentication)
+    assert user == target
+
+
+def test_end_to_end(admin, target):
+    client = APIClient()
+    assert client.get("/me/").json() == {
+        "user": None,
+        "impersonator": None,
+        "django_impersonator": None,
+    }
+    client.credentials(HTTP_AUTHORIZATION=f"Token {admin.auth_token.key}")
+    assert client.get("/me/", HTTP_X_IMPERSONATE_USER=str(target.pk)).json() == {
+        "user": target.pk,
+        "impersonator": admin.pk,
+        "django_impersonator": admin.pk,
+    }
+    response = client.post("/me/", HTTP_X_IMPERSONATE_USER=str(target.pk))
+    assert (response.status_code, response.json()) == (
+        403,
+        {"detail": "Impersonated requests are read-only"},
+    )
+    response = client.get("/me/", HTTP_X_IMPERSONATE_USER="9999")
+    assert (response.status_code, response.json()) == (
+        404,
+        {"detail": "Impersonation target not found"},
+    )
+
+
+def test_system_check(settings):
+    assert check_settings(None) == []
+    settings.DRF_IMPERSONATION = {"READONLY": False, "SIGNAL": True}
+    [error] = check_settings(None)
+    assert error.id == "drf_impersonation.E001"
+    assert "READONLY, SIGNAL" in error.msg
