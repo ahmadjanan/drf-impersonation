@@ -89,7 +89,8 @@ pip install "drf-impersonation[openapi]"
 
 ## Quick start
 
-1. Add the app. This is only needed for [OpenAPI](#openapi) support, but adding it is harmless:
+1. Add the app. It registers the [OpenAPI](#openapi) extension and a system check that catches
+   typos in the [settings](#settings):
 
    ```python
    INSTALLED_APPS = [
@@ -130,7 +131,8 @@ pip install "drf-impersonation[openapi]"
    ```
 
 In a view, `request.user` is the target and `request.impersonator` is the real caller. When
-there is no impersonation, `request.impersonator` is `None`:
+there is no impersonation, `request.impersonator` is `None`. The attribute is set on the
+underlying Django `HttpRequest`, so middleware and signal receivers see it too:
 
 ```python
 @api_view(["GET"])
@@ -174,7 +176,7 @@ on_impersonate() logs, user_impersonated signal ─▶ target, request.impersona
 | No header | No change. `request.impersonator` is `None`. |
 | Caller may not impersonate | Header ignored. The request runs as the caller. |
 | Write method (POST, PUT, PATCH, DELETE) while `READ_ONLY` is on | `403 Impersonated requests are read-only` |
-| No user matches the header value | `404 Impersonation target not found` |
+| No user, or more than one user, matches the header value | `404 Impersonation target not found` |
 | Target is the caller, is inactive, or is a superuser while the caller is not | `404` |
 | Success | `request.user` is the target, `request.impersonator` is the caller, a warning is logged and the signal is sent. |
 
@@ -199,8 +201,9 @@ DRF_IMPERSONATION = {
 | `SIGNALS` | `True` | Send [`user_impersonated`](#signals) for each impersonated request. |
 | `OPENAPI` | `True` | Document the header in [drf-spectacular](#openapi) schemas. |
 
-Settings are read on every request, so `override_settings` works in tests. An unknown key raises
-`ImproperlyConfigured`, which catches typos.
+Settings are read on every request, so `override_settings` works in tests. An unknown key fails
+the Django system check (`drf_impersonation.E001`) at startup and raises `ImproperlyConfigured`
+at request time, which catches typos.
 
 ## Customising the authentication class
 
@@ -209,7 +212,7 @@ For behaviour that differs per class, subclass and override any of these:
 | Attribute / method | Default | Purpose |
 | --- | --- | --- |
 | `impersonation_header` | `"X-Impersonate-User"` | Header that names the target. |
-| `impersonation_lookup_fields` | `("pk",)` | Fields to match the header value against. All valid fields are tried together with OR, for example `("uuid", "email__iexact")`. |
+| `impersonation_lookup_fields` | `("pk",)` | Lookups to match the header value against. All lookups the value is valid for are tried together with OR, for example `("uuid", "email__iexact")`. Lookups may follow relations, such as `("profile__uuid",)`. A value that matches more than one user gives `404`. |
 | `can_impersonate(request, actor)` | `actor.is_superuser` | Whether the caller may impersonate anyone. |
 | `can_impersonate_target(request, actor, target)` | Target is active, and no escalation to superuser | Whether the caller may impersonate this specific target. |
 | `on_impersonate(request, actor, target)` | Logs a warning on the `drf_impersonation` logger | Runs for each impersonated request, before the signal. |
@@ -267,8 +270,10 @@ Token, SimpleJWT or Session. If the base class has no scheme, nothing is added. 
 ## Type checking
 
 The package ships `py.typed`, so mypy and pyright check calls to its hooks. `request.impersonator`
-is set at runtime on DRF's `Request`, which type checkers don't know about. Use
-`getattr(request, "impersonator", None)` if your checker complains.
+is set at runtime on the request, which type checkers don't know about. Use
+`getattr(request, "impersonator", None)` if your checker complains. The same `getattr` is also
+needed in views that list other authentication classes **before** the impersonation class, because
+the attribute is only set once the impersonation class runs.
 
 ## Recipes
 

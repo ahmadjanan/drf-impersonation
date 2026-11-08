@@ -1,6 +1,7 @@
 SECRET_KEY = "test"
 USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
+ROOT_URLCONF = "tests.urls"
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
@@ -9,5 +10,6 @@ INSTALLED_APPS = [
     "rest_framework.authtoken",
     "drf_spectacular",
     "drf_impersonation",
+    "tests",
 ]
 REST_FRAMEWORK = {"DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema"}

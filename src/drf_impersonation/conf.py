@@ -10,12 +10,16 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+def unknown_keys() -> list[str]:
+    configured = getattr(settings, "DRF_IMPERSONATION", {})
+    return sorted(set(configured) - set(DEFAULTS))
+
+
 def get_setting(name: str) -> Any:
     """Read a key from ``settings.DRF_IMPERSONATION``, falling back to ``DEFAULTS``.
 
     Read on every call, so ``override_settings`` works in tests."""
-    configured = getattr(settings, "DRF_IMPERSONATION", {})
-    unknown = set(configured) - set(DEFAULTS)
+    unknown = unknown_keys()
     if unknown:
-        raise ImproperlyConfigured(f"Unknown DRF_IMPERSONATION keys: {', '.join(sorted(unknown))}")
-    return configured.get(name, DEFAULTS[name])
+        raise ImproperlyConfigured(f"Unknown DRF_IMPERSONATION keys: {', '.join(unknown)}")
+    return getattr(settings, "DRF_IMPERSONATION", {}).get(name, DEFAULTS[name])
